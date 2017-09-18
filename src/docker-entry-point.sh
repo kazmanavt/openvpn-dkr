@@ -13,13 +13,13 @@ echo '########################################################'
 
 [ ! -r ${PKI}/ca.crt ] && {
     easyrsa --batch init-pki
+    [ ! -r ${PKI}/dh.pem ] && easyrsa --batch gen-dh
     easyrsa --batch build-ca nopass
 }
 [ ! -r ${PKI}/issued/server.crt ] || [ ! -r ${PKI}/private/server.key ] && {
     rm -f ${PKI}/issued/server.crt ${PKI}/private/server.key ${PKI}/reqs/server.req
     easyrsa --batch build-server-full server nopass
 }
-[ ! -r ${PKI}/dh.pem ] && easyrsa --batch gen-dh
 
 
 echo '########################################################'
@@ -60,8 +60,10 @@ sed -e "s/^port .*$/port ${PORT}/" -i ${CFDIR}/server.conf
     echo ${ROUTES} | \
         awk '{ n = split( $0, a, " *, *"); for(i = 1; i <= n; i++) {  print a[i];} }' | \
         while read R; do
-            echo "-$R-"
-            echo "push \"route $R\"" >> ${CFDIR}/server.conf
+            STRING="push \"route $R\""
+            if ! grep -q "$STRING" ${CFDIR}/server.conf > /dev/null; then
+                echo "$STRING" >> ${CFDIR}/server.conf
+            fi
         done
 }
 
