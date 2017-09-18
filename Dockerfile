@@ -17,6 +17,6 @@ ADD defconf/vars /usr/share/easy-rsa/
 
 ENV PORT=1194 UDP=1 \
     BRIDGE=0 BRIDGE_OPTS="10.22.0.11 255.255.255.0 10.22.0.178 10.22.0.201" \
-            RANGE="10.254.0.0 255.255.0.0" ROUTES="192.168.1.0 255.255.255.0, 10.128.0.0 255.127.0.0"
+            RANGE="10.128.0.0 255.192.0.0" ROUTES="192.168.1.0 255.255.255.0"
 
 ENTRYPOINT /docker-entry-point.sh
