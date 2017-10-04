@@ -1,26 +1,11 @@
 #!/bin/sh
 
-# client_* if not configured -> Error
-# run_server if not configured -> configure else run
-# configure 
-
 set -eu
 
 CFDIR=/etc/openvpn
 PKI=${CFDIR}/pki
 export EASYRSA_PKI=${PKI}
 export EASYRSA=/usr/share/easy-rsa
-
-# PROTO=tcp
-# ADDR=$(hostname -i)
-# PORT=1194
-# IP
-# MASK
-# ROUTED=1
-# ROUTES
-# DEFROUTE
-# DNS
-
 
 if [ ! -f $CFDIR/.configured ]; then
     # fix mounting volume from FS
@@ -34,35 +19,41 @@ usage () {
         echo
     fi
     echo "docker run stim/openvpn-dkr [config|client_new|client_get] [options]"
+    echo
     echo "        w/o arguments it run OpenVPN server according to prevoisly"
     echo "        generated config. If no config was generated or some options are"
     echo "        specified on the line starting with '-' sign, then it first run"
     echo "        configure step as <config> command was passed then run server."
-    echo "\n    By default routed networking wil be used with attempt to route"
-    echo "      all localy configured networks\n"
+    echo
+    echo "    By default routed networking wil be used with attempt to route"
+    echo "      all localy configured networks"
+    echo
     echo "    config [options]"
     echo "        run configure step - generate PKI and client server configs:"
+    echo
     echo "      --uri proto://public_address:port"
     echo "        specifieces target server endpoint proto can be udp or tcp,"
     echo "        public_address - should be ip or DNS name of server externaly"
     echo "        available for clients, port - denotes port openvpn server should"
     echo "        listen on"
+    echo
     echo "      --reinit"
     echo "        regenerate PKI, with new CA and server crt/key"
+    echo
     echo "      --bridged [ip/bits start_ip end_ip]"
     echo "        use tap device and build bridged networking for clients."
     echo "        ip/bits - is address and netmask in CIDR notation of server in"
     echo "        bridged network, client gets addresses from start_ip to end_ip,"
     echo "        by default it gets 10.57.0.1/16 10.57.0.4 10.57.254.253"
+    echo
     echo "      --routed [ip/bits]"
     echo "        use tun device and build routed networking for clients."
     echo "        ip/bits - ip address for server and netmask for network in"
     echo "        CIDR notation"
-
 }
 
 init_pki () {
-    echo "Initializing PKI ..."
+    echo "Initializing PKI ..." >&2
     easyrsa --batch init-pki
     easyrsa --batch gen-dh
     openvpn --genkey --secret $PKI/ta.key
@@ -217,24 +208,22 @@ mk_configs () {
         echo "key $PKI/private/server.key"
         echo "tls-auth $PKI/ta.key 0"
         echo "remote-cert-tls client"
-        echo ""
+        echo
         echo "cipher AES-256-GCM"
-        echo "ncp-ciphers AES-128-CBC:AES-128-CFB:AES-128-CFB1:AES-128-CFB8:AES-128-GCM:AES-128-OFB:AES-256-CBC:AES-256-CFB:AES-256-CFB1:AES-256-CFB8:AES-256-GCM:AES-256-OFB:CAMELLIA-256-CBC:CAMELLIA-256-CFB:CAMELLIA-256-CFB1:CAMELLIA-256-CFB8:CAMELLIA-256-OFB"
         echo "comp-lzo"
         echo "push \"comp-lzo\""
         echo ";max-clients 100"
-        echo ""
+        echo
         echo "user nobody"
         echo "group nobody"
-        echo ""
+        echo
         echo "status /tmp/openvpn-status.log"
         echo "status-version 3"
         echo "log-append /dev/stdout"
         echo "verb 3"
         echo "mute 20"
-        echo ""
-        [ "${PROTO:-tcp}" = "udp" ] && echo "explicit-exit-notify 1"
-        echo ""
+        echo
+        [ "${PROTO:-tcp}" = "udp" ] && echo "explicit-exit-notify 1" && echo
         echo ";local $(hostname -i)"
         echo "persist-key"
         echo "persist-tun"
@@ -275,11 +264,10 @@ mk_configs () {
         # echo "group nobody"
         echo "persist-key"
         echo "persist-tun"
-        # echo "remote-cert-tls server"
+        echo "remote-cert-tls server"
         # echo "cipher AES-256-GCM"
         # echo "comp-lzo"
         echo "verb 3"
-        echo "remote-cert-tls server"
 
     } > $CFDIR/client.conf
     echo "#!/bin/sh" >> $CFDIR/ipt_up
