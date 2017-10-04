@@ -281,11 +281,10 @@ mk_configs () {
         echo "verb 3"
 
     } > $CFDIR/client.conf
-    if [ "${ROUTED:-yes}" = "yes" ]; then
-        mk_tun
-        iptables -F
-        iptables -t nat -A POSTROUTING -s ${IP:-10.57.0.0}/${BITS:-16} -o eth0 -j MASQUERADE
-    fi
+    echo "#!/bin/sh" >> /usr/local/bin/ipt_up
+    echo "iptables -F" >> /usr/local/bin/ipt_up
+    echo "iptables -t nat -A POSTROUTING -s ${IP:-10.57.0.0}/${BITS:-16} -o eth0 -j MASQUERADE" >> /usr/local/bin/ipt_up
+    chmod 755 /usr/local/bin/ipt_up
     touch $CFDIR/.configured
     return 0
 }
@@ -295,6 +294,11 @@ run_server () {
         mk_configs
     fi
     echo "Launching server ..."
+    if grep -q 'dev tun' $CFDIR/server.conf ; then
+        mk_tun
+        ipt_up
+    fi
+
     /usr/sbin/openvpn $CFDIR/server.conf
 }
 
