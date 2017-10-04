@@ -158,7 +158,7 @@ mk_configs () {
                 shift
                 ROUTED="yes"
                 if [ -z "${1:-}" ] || [ "${1#--}" != "$1" ]; then
-                    IP="10.57.0.1"
+                    IP="10.57.0.0"
                     MASK="255.255.0.0"
                 else
                     IP=${1%/*}
@@ -232,7 +232,7 @@ mk_configs () {
         echo "verb 3"
         echo "mute 20"
         echo ""
-        echo "explicit-exit-notify 1"
+        [ "${PROTO:-tcp}" = "udp" ] && echo "explicit-exit-notify 1"
         echo ""
         echo ";local $(hostname -i)"
         echo "persist-key"
@@ -243,7 +243,7 @@ mk_configs () {
         echo "proto ${PROTO:-tcp}"
         if [ "${ROUTED:-yes}" = "yes" ]; then
             echo "dev tun"
-            echo "server ${IP:-10.57.0.1} ${MASK:-255.255.0.0}"
+            echo "server ${IP:-10.57.0.0} ${MASK:-255.255.0.0}"
         else
             # echo "Not implemented yet"
             # exit 99
@@ -327,15 +327,19 @@ client_get () {
             combo)
                 cat $CFDIR/client.conf
                 echo "key-direction 1"
+                echo ""
                 echo "<ca>"
                 cat $PKI/ca.crt
                 echo "</ca>"
+                echo ""
                 echo "<cert>"
                 cat "$PKI/issued/$cn.crt"
                 echo "</cert>"
+                echo ""
                 echo "<key>"
                 cat "$PKI/private/$cn.key"
                 echo "</key>"
+                echo ""
                 echo "<tls-auth>"
                 cat $PKI/ta.key
                 echo "</tls-auth>"
