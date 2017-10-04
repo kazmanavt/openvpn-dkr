@@ -1,0 +1,389 @@
+#!/bin/sh
+
+# client_* if not configured -> Error
+# run_server if not configured -> configure else run
+# configure 
+
+set -eu
+
+CFDIR=/etc/openvpn
+PKI=${CFDIR}/pki
+export EASYRSA_PKI=${PKI}
+export EASYRSA=/usr/share/easy-rsa
+
+if [ ! -f $CFDIR/.configured ]; then
+    # fix mounting volume from FS
+    [ ! -f ${CFDIR}/up.sh ] && cp -a ${CFDIR}.std/up.sh ${CFDIR}/
+    [ ! -f ${CFDIR}/down.sh ] && cp -a ${CFDIR}.std/down.sh ${CFDIR}/
+
+fi
+usage () {
+    if [ "${1:+yes}" = "yes" ]; then
+        echo "$*"
+        echo
+    fi
+    echo "docker run stim/openvpn-dkr [config|client_new|client_get] [options]"
+    echo "        w/o arguments it run OpenVPN server according to prevoisly"
+    echo "        generated config. If no config was generated or some options are"
+    echo "        specified on the line starting with '-' sign, then it first run"
+    echo "        configure step as <config> command was passed then run server."
+    echo "\n    By default routed networking wil be used with attempt to route"
+    echo "      all localy configured networks\n"
+    echo "    config [options]"
+    echo "        run configure step - generate PKI and client server configs:"
+    echo "      --uri proto://public_address:port"
+    echo "        specifieces target server endpoint proto can be udp or tcp,"
+    echo "        public_address - should be ip or DNS name of server externaly"
+    echo "        available for clients, port - denotes port openvpn server should"
+    echo "        listen on"
+    echo "      --reinit"
+    echo "        regenerate PKI, with new CA and server crt/key"
+    echo "      --bridged [ip/bits start_ip end_ip]"
+    echo "        use tap device and build bridged networking for clients."
+    echo "        ip/bits - is address and netmask in CIDR notation of server in"
+    echo "        bridged network, client gets addresses from start_ip to end_ip,"
+    echo "        by default it gets 10.57.0.1/16 10.57.0.4 10.57.254.253"
+    echo "      --routed [ip/bits]"
+    echo "        use tun device and build routed networking for clients."
+    echo "        ip/bits - ip address for server and netmask for network in"
+    echo "        CIDR notation"
+
+}
+
+init_pki () {
+    echo "Initializing PKI ..."
+    easyrsa --batch init-pki
+    easyrsa --batch gen-dh
+    openvpn --genkey --secret $PKI/ta.key
+    easyrsa --batch build-ca nopass
+    easyrsa --batch build-server-full server nopass
+    touch $PKI/.initialized
+}
+
+bits2mask () {
+    local bits=$1
+    local full_octet=$((bits / 8))
+    local rest=$((bits / 8))
+    local c=4
+    local mask
+    while [ $c -gt 0 ]; do
+        [ -n "$mask" ] && mask="$mask."
+        if [ full_octet -gt 0 ]; then
+            mask="${mask}255"
+            full_octet=$((full_octet - 1))
+        elif [ $rest -gt 0 ]; then
+            mask="$mask$(( (255 << rest) & 255 ))"
+        else
+            mask="${mask}0"
+        fi
+        c=$((c - 1))
+    done
+    echo -n $mask
+}
+
+mk_tun () {
+    mkdir -p /dev/net
+    if [ ! -c /dev/net/tun ]; then
+        mknod /dev/net/tun c 10 200
+    fi
+}
+
+
+
+mk_configs () {
+    local PROTO=tcp
+    local ADDR=$(hostname -i)
+    local PORT=1194
+    local IP
+    local MASK
+    local ROUTED=1
+    local ROUTES
+    local DEFROUTE
+    local DNS
+    while [ "${1:-}" != "" ]; do
+        case "$1" in
+            --reinit) shift; init_pki;;
+            --uri)
+                shift
+                [ -z "${1:-}" ] && usage "Error --uri w/o arg given" && exit 1
+                PROTO=${1%%:*}
+                ADDR=${1#*://}
+                PORT=${ADDR##*:}
+                ADDR=${ADDR%%:*}
+                local chk=$1
+                [ "$PORT" = "$ADDR" ] && PORT=1194 && chk="$chk:1194"
+                local cha=$ADDR
+                [ "$ADDR" = "0.0.0.0" ] && ADDR=$(hostname -i)
+                if [ "$PROTO://$cha:$PORT" != "$chk" ]; then
+                    usage "Error in URI"
+                    exit 1
+                fi
+                shift
+            ;;
+            --bridged)
+                shift
+                if [ -z "${1:-}" ] || [ "${1#--}" != "$1" ]; then
+                    IP="10.57.0.1"
+                    MASK="255.255.0.0"
+                    BSTART="10.57.0.4"
+                    BEND="10.57.254.253"
+                elif [ "$1" = "dhcp" ]; then
+                    IP=""
+                    MASK=""
+                    BSTART=""
+                    BEND=""
+                    shift
+                elif [ -z "${2:-}" -o -z "${3:-}" ]; then
+                    usage "Error --bridged w/o arg given"
+                    exit 1
+                else
+                    IP=${1%/*}
+                    bits=${1#*/}
+                    if [ "$IP/$bits" != "$1" ]; then
+                        usage "Bad value to --bridged flag"
+                        exit 1
+                    fi
+                    MASK=$(bits2mask $bits)
+                    BSTART="$2"
+                    BEND="$3"
+                    shift 3
+                fi
+            ;;
+            --routed)
+                shift
+                ROUTED=1
+                if [ -z "${1:-}" ] || [ "${1#--}" = "$1" ]; then
+                    IP="10.57.0.1"
+                    MASK="255.255.0.0"
+                else
+                    IP=${1%/*}
+                    bits=${1#*/}
+                    if [ "$IP/$bits" != "$1" ]; then
+                        usage "Bad value to --routed flag"
+                        exit 1
+                    fi
+                    MASK=$(bits2mask $bits)
+                fi
+                shift
+            ;;
+            --route-all)
+                shift
+                DEFROUTE="push \"redirect-gateway def1"
+                while [ -n "${1:-}" -o "${1#--}" = "$1" ]; do
+                    DEFROUTE="$DEFROUTE $1"
+                    shift
+                done
+                DEFROUTE="$DEFROUTE\""
+            ;;
+            --route-add)
+                shift
+                ip=${1%/*}
+                bits=${1#*/}
+                if [ "$ip/$bits" != "$1" ]; then
+                    usage "Bad value to --add-route flag"
+                    exit 1
+                fi
+                mask=$(bits2mask $bits)
+                ROUTES="${ROUTES}push \"route $ip $mask\"\n"
+                shift
+            ;;
+            --set-dns)
+                shift
+                if [ -z "${1:-}" ] || [ "${1#--}" != "$1" ]; then
+                    usage "Error: no arg to --set-dns option"
+                DNS="push \"dhcp-option DNS $1\""
+                shift
+            ;;
+            *)
+                usage "Unknown options follows '$*'"
+                exit 1
+            ;;
+        esac
+    done
+    [ ! -f $PKI/.initialized ] && init_pki
+    echo "Configuring ..."
+    {
+        echo "dh $PKI/dh.pem"
+        echo "ca $PKI/ca.crt"
+        echo "cert $PKI/issued/server.crt"
+        echo "key $PKI/private/server.key"
+        echo "tls-auth $PKI/ta.key 0"
+        echo ""
+        echo "cipher AES-256-GCM"
+        echo "comp-lzo"
+        echo "push \"comp-lzo\""
+        echo ";max-clients 100"
+        echo ""
+        echo "user nobody"
+        echo "group nobody"
+        echo ""
+        echo "status /tmp/openvpn-status.log"
+        echo "status-version 3"
+        echo "log-append /dev/stdout"
+        echo "verb 3"
+        echo "mute 20"
+        echo ""
+        echo "explicit-exit-notify 1"
+        echo ""
+        echo ";local $(hostname -i)"
+        echo "persist-key"
+        echo "persist-tun"
+        echo "keepalive 10 120"
+        echo "topology subnet"
+        echo "port $PORT"
+        echo "proto $PROTO"
+        if [ -n "${ROUTED:-}" ]; then
+            echo "dev tun"
+            echo "server $IP $MASK"
+        else
+            # echo "Not implemented yet"
+            # exit 99
+            echo "dev tap"
+            echo "server-bridge $IP $MASK $BSTART $BEND"
+        fi
+        echo "ifconfig-pool-persist /etc/openvpn/ipp.txt"
+        printf "${ROUTES:-}"
+        printf "${DEFROUTE:-}"
+        printf "${DNS:-}"
+    } > $CFDIR/server.conf
+    {
+        echo "client"
+        if [ -n "${ROUTED:-}" ]; then
+            echo "dev tun"
+        else
+            echo "dev tap"
+        fi
+        echo "proto $PROTO"
+        echo "remote $ADDR $PORT"
+        echo "resolv-retry infinite"
+        echo "nobind"
+        echo "user nobody"
+        echo "group nobody"
+        echo "persist-key"
+        echo "persist-tun"
+        echo "remote-cert-tls server"
+        echo "cipher AES-256-GCM"
+        # echo "comp-lzo"
+        echo "verb 3"
+
+    } > $CFDIR/client.conf
+    return 0
+}
+
+run_server () {
+    if [ ! -f $CFDIR/.configured ]; then
+        mk_configs
+    fi
+    echo "Launching server ..."
+    sh
+    return 0
+    /usr/sbin/openvpn $CFDIR/server.conf
+}
+
+client_new () {
+    echo "Register new client ..."
+    return 0
+}
+
+client_get () {
+    echo "Generating client configs ..."
+    return 0
+}
+
+# Entry point 
+if [ $# -eq 0 ] ; then
+    run_server
+else
+    case $1 in
+        -*) mk_configs "$@"; run_server;;
+        config) shift; mk_configs "$@";;
+        client_new) shift; client_new "$@";;
+        client_get) shift; client_get "$@";;
+        *) exec "$@" ;;
+    esac
+fi
+exit 0
+
+
+
+echo '########################################################'
+echo '##########        Initializing PKI        ##############'
+echo '########################################################'
+
+[ ! -r ${PKI}/ca.crt ] && {
+    easyrsa --batch init-pki
+    [ ! -r ${PKI}/dh.pem ] && easyrsa --batch gen-dh
+    easyrsa --batch build-ca nopass
+}
+[ ! -r ${PKI}/issued/server.crt ] || [ ! -r ${PKI}/private/server.key ] && {
+    rm -f ${PKI}/issued/server.crt ${PKI}/private/server.key ${PKI}/reqs/server.req
+    easyrsa --batch build-server-full server nopass
+}
+
+
+echo '########################################################'
+echo '##########   Initializing OpenVPN config  ##############'
+echo '########################################################'
+
+# Server configuration
+
+[ ! -r ${CFDIR}/server.conf ] && cp /etc/openvpn.std/server.conf ${CFDIR}
+[ -n "$LISTEN" ] && {
+    sed -e "s/^;*local .*$/local $LISTEN/" -i ${CFDIR}/server.conf
+} || {
+    sed -e 's/^;*local .*$/;local a.b.c.d/' -i ${CFDIR}/server.conf
+}
+sed -e "s/^port .*$/port ${PORT}/" -i ${CFDIR}/server.conf
+[[ $UDP == 1 ]] && {
+    sed -e 's/^;*proto udp.*$/proto udp/' \
+        -e 's/^;*proto tcp.*$/;proto tcp/' \
+        -i ${CFDIR}/server.conf
+} || {
+    sed -e 's/^;*proto udp.*$/;proto udp/' \
+        -e 's/^;*proto tcp.*$/proto tcp/' \
+        -i ${CFDIR}/server.conf
+}
+[[ $BRIDGE == 1 ]] && {
+    sed -e "s/^;*server-bridge .*$/server-bridge ${BRIDGE_OPTS}/" \
+        -e 's/^;*server .*/;server x.y.z.1 n.m.a.sk/' \
+        -e 's/^;*dev tun.*$/;dev tun/' \
+        -e 's/^;*dev tap.*$/dev tap/' \
+        -e '/push "route/d' \
+        -i ${CFDIR}/server.conf
+} || {
+    sed -e 's/^;*server-bridge .*$/;server-bridge x.y.z.1 n.m.a.sk x.y.z.start x.y.z.end/' \
+        -e "s/^;*server .*/server ${RANGE}/" \
+        -e 's/^;*dev tun.*$/dev tun/' \
+        -e 's/^;*dev tap.*$/;dev tap/' \
+        -i ${CFDIR}/server.conf
+    echo ${ROUTES} | \
+        awk '{ n = split( $0, a, " *, *"); for(i = 1; i <= n; i++) {  print a[i];} }' | \
+        while read R; do
+            STRING="push \"route $R\""
+            if ! grep -q "$STRING" ${CFDIR}/server.conf > /dev/null; then
+                echo "$STRING" >> ${CFDIR}/server.conf
+            fi
+        done
+}
+
+# Client configuration
+
+[ ! -r ${CFDIR}/client.conf ] && cp /etc/openvpn.std/client.conf ${CFDIR}
+[ -n "$LISTEN" ] && {
+    sed -e "s/^;*remote .*$/remote $LISTEN $PORT/" -i ${CFDIR}/client.conf
+} || {
+    sed -e 's/^;*remote .*$/;remote a.b.c.d port/' -i ${CFDIR}/client.conf
+}
+[[ $UDP == 1 ]] && {
+    sed -e 's/^;*proto udp.*$/proto udp/' \
+        -e 's/^;*proto tcp.*$/;proto tcp/' \
+        -i ${CFDIR}/client.conf
+} || {
+    sed -e 's/^;*proto udp.*$/;proto udp/' \
+        -e 's/^;*proto tcp.*$/proto tcp/' \
+        -i ${CFDIR}/client.conf
+}
+
+echo "Starting OpenVPN server."
+
+/usr/sbin/openvpn /etc/openvpn/server.conf
