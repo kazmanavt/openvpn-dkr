@@ -314,12 +314,12 @@ client_get () {
         case ${1:-combo} in
             ca) cat "$PKI/ca.crt" ;;
             ta) cat "$PKI/ta.key" ;;
-            crt) cat "$PKI/issued/$cn.crt" ;;
+            cert) cat "$PKI/issued/$cn.crt" ;;
             key) cat "$PKI/private/$cn.key" ;;
             cf)
                 echo "ca ca.crt"
-                echo "cert $1.crt"
-                echo "key $1.key"
+                echo "cert $cn.crt"
+                echo "key $cn.key"
                 echo "tls-auth ta.key 1"
                 echo ""
                 cat $CFDIR/client.conf
