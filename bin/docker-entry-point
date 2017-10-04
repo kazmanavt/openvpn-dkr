@@ -11,6 +11,17 @@ PKI=${CFDIR}/pki
 export EASYRSA_PKI=${PKI}
 export EASYRSA=/usr/share/easy-rsa
 
+# PROTO=tcp
+# ADDR=$(hostname -i)
+# PORT=1194
+# IP
+# MASK
+# ROUTED=1
+# ROUTES
+# DEFROUTE
+# DNS
+
+
 if [ ! -f $CFDIR/.configured ]; then
     # fix mounting volume from FS
     [ ! -f ${CFDIR}/up.sh ] && cp -a ${CFDIR}.std/up.sh ${CFDIR}/
@@ -63,22 +74,23 @@ init_pki () {
 bits2mask () {
     local bits=$1
     local full_octet=$((bits / 8))
-    local rest=$((bits / 8))
+    local rest=$((bits % 8))
     local c=4
     local mask
     while [ $c -gt 0 ]; do
-        [ -n "$mask" ] && mask="$mask."
-        if [ full_octet -gt 0 ]; then
-            mask="${mask}255"
+        [ -n "${mask:-}" ] && mask="$mask."
+        if [ $full_octet -gt 0 ]; then
+            mask="${mask:-}255"
             full_octet=$((full_octet - 1))
         elif [ $rest -gt 0 ]; then
-            mask="$mask$(( (255 << rest) & 255 ))"
+            mask="${mask:-}$(( (255 << (8 - rest) ) & 255 ))"
+            rest=0
         else
-            mask="${mask}0"
+            mask="${mask:-}0"
         fi
         c=$((c - 1))
     done
-    echo -n $mask
+    echo $mask
 }
 
 mk_tun () {
@@ -91,30 +103,22 @@ mk_tun () {
 
 
 mk_configs () {
-    local PROTO=tcp
-    local ADDR=$(hostname -i)
-    local PORT=1194
-    local IP
-    local MASK
-    local ROUTED=1
-    local ROUTES
-    local DEFROUTE
-    local DNS
     while [ "${1:-}" != "" ]; do
         case "$1" in
             --reinit) shift; init_pki;;
             --uri)
                 shift
-                [ -z "${1:-}" ] && usage "Error --uri w/o arg given" && exit 1
+                if [ -z "${1:-}" ] || [ "${1#--}" != "$1" ]; then
+                    usage "Error --uri w/o arg given"
+                    exit 1
+                fi
                 PROTO=${1%%:*}
                 ADDR=${1#*://}
                 PORT=${ADDR##*:}
                 ADDR=${ADDR%%:*}
                 local chk=$1
                 [ "$PORT" = "$ADDR" ] && PORT=1194 && chk="$chk:1194"
-                local cha=$ADDR
-                [ "$ADDR" = "0.0.0.0" ] && ADDR=$(hostname -i)
-                if [ "$PROTO://$cha:$PORT" != "$chk" ]; then
+                if [ "$PROTO://$ADDR:$PORT" != "$chk" ]; then
                     usage "Error in URI"
                     exit 1
                 fi
@@ -122,6 +126,7 @@ mk_configs () {
             ;;
             --bridged)
                 shift
+                ROUTED="no"
                 if [ -z "${1:-}" ] || [ "${1#--}" != "$1" ]; then
                     IP="10.57.0.1"
                     MASK="255.255.0.0"
@@ -151,8 +156,8 @@ mk_configs () {
             ;;
             --routed)
                 shift
-                ROUTED=1
-                if [ -z "${1:-}" ] || [ "${1#--}" = "$1" ]; then
+                ROUTED="yes"
+                if [ -z "${1:-}" ] || [ "${1#--}" != "$1" ]; then
                     IP="10.57.0.1"
                     MASK="255.255.0.0"
                 else
@@ -169,7 +174,7 @@ mk_configs () {
             --route-all)
                 shift
                 DEFROUTE="push \"redirect-gateway def1"
-                while [ -n "${1:-}" -o "${1#--}" = "$1" ]; do
+                while [ -n "${1:-}" -a "${1#--}" = "$1" ]; do
                     DEFROUTE="$DEFROUTE $1"
                     shift
                 done
@@ -184,13 +189,15 @@ mk_configs () {
                     exit 1
                 fi
                 mask=$(bits2mask $bits)
-                ROUTES="${ROUTES}push \"route $ip $mask\"\n"
+                ROUTES="${ROUTES:-}push \"route $ip $mask\"\n"
                 shift
             ;;
             --set-dns)
                 shift
                 if [ -z "${1:-}" ] || [ "${1#--}" != "$1" ]; then
                     usage "Error: no arg to --set-dns option"
+                    exit 1
+                fi
                 DNS="push \"dhcp-option DNS $1\""
                 shift
             ;;
@@ -200,6 +207,7 @@ mk_configs () {
             ;;
         esac
     done
+    [ -z "${ADDR:-}" ] && usage "--uri must be given once" && exit 1
     [ ! -f $PKI/.initialized ] && init_pki
     echo "Configuring ..."
     {
@@ -208,6 +216,7 @@ mk_configs () {
         echo "cert $PKI/issued/server.crt"
         echo "key $PKI/private/server.key"
         echo "tls-auth $PKI/ta.key 0"
+        echo "remote-cert-tls client"
         echo ""
         echo "cipher AES-256-GCM"
         echo "comp-lzo"
@@ -230,31 +239,34 @@ mk_configs () {
         echo "persist-tun"
         echo "keepalive 10 120"
         echo "topology subnet"
-        echo "port $PORT"
-        echo "proto $PROTO"
-        if [ -n "${ROUTED:-}" ]; then
+        echo "port ${PORT:-1194}"
+        echo "proto ${PROTO:-tcp}"
+        if [ "${ROUTED:-yes}" = "yes" ]; then
             echo "dev tun"
-            echo "server $IP $MASK"
+            echo "server ${IP:-10.57.0.1} ${MASK:-255.255.0.0}"
         else
             # echo "Not implemented yet"
             # exit 99
             echo "dev tap"
-            echo "server-bridge $IP $MASK $BSTART $BEND"
+            echo "server-bridge ${IP:-} ${MASK:-} ${BSTART:-} ${BEND:-}"
         fi
         echo "ifconfig-pool-persist /etc/openvpn/ipp.txt"
-        printf "${ROUTES:-}"
-        printf "${DEFROUTE:-}"
-        printf "${DNS:-}"
+        if [ -z "${DEFROUTE:-}" ]; then
+            printf "${ROUTES:-}${ROUTES:+\n}"
+        else
+            echo "${DEFROUTE}"
+        fi
+        printf "${DNS:-}${DNS:+\n}"
     } > $CFDIR/server.conf
     {
         echo "client"
-        if [ -n "${ROUTED:-}" ]; then
+        if [ "${ROUTED:-yes}" = "yes" ]; then
             echo "dev tun"
         else
             echo "dev tap"
         fi
-        echo "proto $PROTO"
-        echo "remote $ADDR $PORT"
+        echo "proto ${PROTO:-tcp}"
+        echo "remote $ADDR ${PORT:-1194}"
         echo "resolv-retry infinite"
         echo "nobind"
         echo "user nobody"
@@ -267,6 +279,7 @@ mk_configs () {
         echo "verb 3"
 
     } > $CFDIR/client.conf
+    touch $CFDIR/.configured
     return 0
 }
 
@@ -275,22 +288,74 @@ run_server () {
         mk_configs
     fi
     echo "Launching server ..."
-    sh
-    return 0
+    if grep -q 'dev tun' $CFDIR/server.conf; then
+        mk_tun
+    fi
     /usr/sbin/openvpn $CFDIR/server.conf
 }
 
 client_new () {
     echo "Register new client ..."
+    [ ! -f $PKI/.initialized ] && echo "Error: PKI not initialized" && exit 1
+    [ -z "${1:-}" ] && echo "Error: no client name supplied"
+    touch "/tmp/$1"
+    [ ! -f "/tmp/$1" ] && echo "Error: unappropriate clientname supplied 2" && exit 1
+    rm -f "/tmp/$1"
+    easyrsa --batch build-client-full "$1" nopass
     return 0
 }
 
 client_get () {
     echo "Generating client configs ..."
+    cn=${1:-}
+    shift
+    [ -z "$cn" ] && echo "Client name must be given"
+    if [ -f "$PKI/issued/$cn.crt" -a -f "$PKI/private/$cn.key" ]; then
+        case ${1:-combo} in
+            ca) cat "$PKI/ca.crt" ;;
+            ta) cat "$PKI/ta.key" ;;
+            crt) cat "$PKI/issued/$cn.crt" ;;
+            key) cat "$PKI/private/$cn.key" ;;
+            cf)
+                echo "ca ca.crt"
+                echo "cert $1.crt"
+                echo "key $1.key"
+                echo "tls-auth ta.key 1"
+                echo ""
+                cat $CFDIR/client.conf
+            ;;
+            combo)
+                cat $CFDIR/client.conf
+                echo "key-direction 1"
+                echo "<ca>"
+                cat $PKI/ca.crt
+                echo "</ca>"
+                echo "<cert>"
+                cat "$PKI/issued/$cn.crt"
+                echo "</cert>"
+                echo "<key>"
+                cat "$PKI/private/$cn.key"
+                echo "</key>"
+                echo "<tls-auth>"
+                cat $PKI/ta.key
+                echo "</tls-auth>"
+            ;;
+            *) echo "Unknown request"; exit 1 ;;
+        esac
+    else
+        echo "No client found with name '$cn'"
+        exit 1
+    fi
     return 0
 }
 
-# Entry point 
+#  d88888b d8b   db d888888b d8888b. db    db      d8888b.  .d88b.  d888888b d8b   db d888888b 
+#  88'     888o  88 `~~88~~' 88  `8D `8b  d8'      88  `8D .8P  Y8.   `88'   888o  88 `~~88~~' 
+#  88ooooo 88V8o 88    88    88oobY'  `8bd8'       88oodD' 88    88    88    88V8o 88    88    
+#  88~~~~~ 88 V8o88    88    88`8b      88         88~~~   88    88    88    88 V8o88    88    
+#  88.     88  V888    88    88 `88.    88         88      `8b  d8'   .88.   88  V888    88    
+#  Y88888P VP   V8P    YP    88   YD    YP         88       `Y88P'  Y888888P VP   V8P    YP    
+
 if [ $# -eq 0 ] ; then
     run_server
 else
@@ -303,87 +368,3 @@ else
     esac
 fi
 exit 0
-
-
-
-echo '########################################################'
-echo '##########        Initializing PKI        ##############'
-echo '########################################################'
-
-[ ! -r ${PKI}/ca.crt ] && {
-    easyrsa --batch init-pki
-    [ ! -r ${PKI}/dh.pem ] && easyrsa --batch gen-dh
-    easyrsa --batch build-ca nopass
-}
-[ ! -r ${PKI}/issued/server.crt ] || [ ! -r ${PKI}/private/server.key ] && {
-    rm -f ${PKI}/issued/server.crt ${PKI}/private/server.key ${PKI}/reqs/server.req
-    easyrsa --batch build-server-full server nopass
-}
-
-
-echo '########################################################'
-echo '##########   Initializing OpenVPN config  ##############'
-echo '########################################################'
-
-# Server configuration
-
-[ ! -r ${CFDIR}/server.conf ] && cp /etc/openvpn.std/server.conf ${CFDIR}
-[ -n "$LISTEN" ] && {
-    sed -e "s/^;*local .*$/local $LISTEN/" -i ${CFDIR}/server.conf
-} || {
-    sed -e 's/^;*local .*$/;local a.b.c.d/' -i ${CFDIR}/server.conf
-}
-sed -e "s/^port .*$/port ${PORT}/" -i ${CFDIR}/server.conf
-[[ $UDP == 1 ]] && {
-    sed -e 's/^;*proto udp.*$/proto udp/' \
-        -e 's/^;*proto tcp.*$/;proto tcp/' \
-        -i ${CFDIR}/server.conf
-} || {
-    sed -e 's/^;*proto udp.*$/;proto udp/' \
-        -e 's/^;*proto tcp.*$/proto tcp/' \
-        -i ${CFDIR}/server.conf
-}
-[[ $BRIDGE == 1 ]] && {
-    sed -e "s/^;*server-bridge .*$/server-bridge ${BRIDGE_OPTS}/" \
-        -e 's/^;*server .*/;server x.y.z.1 n.m.a.sk/' \
-        -e 's/^;*dev tun.*$/;dev tun/' \
-        -e 's/^;*dev tap.*$/dev tap/' \
-        -e '/push "route/d' \
-        -i ${CFDIR}/server.conf
-} || {
-    sed -e 's/^;*server-bridge .*$/;server-bridge x.y.z.1 n.m.a.sk x.y.z.start x.y.z.end/' \
-        -e "s/^;*server .*/server ${RANGE}/" \
-        -e 's/^;*dev tun.*$/dev tun/' \
-        -e 's/^;*dev tap.*$/;dev tap/' \
-        -i ${CFDIR}/server.conf
-    echo ${ROUTES} | \
-        awk '{ n = split( $0, a, " *, *"); for(i = 1; i <= n; i++) {  print a[i];} }' | \
-        while read R; do
-            STRING="push \"route $R\""
-            if ! grep -q "$STRING" ${CFDIR}/server.conf > /dev/null; then
-                echo "$STRING" >> ${CFDIR}/server.conf
-            fi
-        done
-}
-
-# Client configuration
-
-[ ! -r ${CFDIR}/client.conf ] && cp /etc/openvpn.std/client.conf ${CFDIR}
-[ -n "$LISTEN" ] && {
-    sed -e "s/^;*remote .*$/remote $LISTEN $PORT/" -i ${CFDIR}/client.conf
-} || {
-    sed -e 's/^;*remote .*$/;remote a.b.c.d port/' -i ${CFDIR}/client.conf
-}
-[[ $UDP == 1 ]] && {
-    sed -e 's/^;*proto udp.*$/proto udp/' \
-        -e 's/^;*proto tcp.*$/;proto tcp/' \
-        -i ${CFDIR}/client.conf
-} || {
-    sed -e 's/^;*proto udp.*$/;proto udp/' \
-        -e 's/^;*proto tcp.*$/proto tcp/' \
-        -i ${CFDIR}/client.conf
-}
-
-echo "Starting OpenVPN server."
-
-/usr/sbin/openvpn /etc/openvpn/server.conf
