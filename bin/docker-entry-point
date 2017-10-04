@@ -279,6 +279,7 @@ mk_configs () {
         # echo "cipher AES-256-GCM"
         # echo "comp-lzo"
         echo "verb 3"
+        echo "remote-cert-tls server"
 
     } > $CFDIR/client.conf
     echo "#!/bin/sh" >> $CFDIR/ipt_up
