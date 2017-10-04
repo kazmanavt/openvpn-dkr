@@ -1,5 +1,0 @@
-#!/bin/sh
-
-. /env.sh
-
-EASYRSA=$EASYRSA EASYRSA_PKI=$EASYRSA_PKI /usr/share/easy-rsa/easyrsa $@

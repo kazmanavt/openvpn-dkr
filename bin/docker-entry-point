@@ -162,12 +162,12 @@ mk_configs () {
                     MASK="255.255.0.0"
                 else
                     IP=${1%/*}
-                    bits=${1#*/}
-                    if [ "$IP/$bits" != "$1" ]; then
+                    BITS=${1#*/}
+                    if [ "$IP/$BITS" != "$1" ]; then
                         usage "Bad value to --routed flag"
                         exit 1
                     fi
-                    MASK=$(bits2mask $bits)
+                    MASK=$(bits2mask $BITS)
                 fi
                 shift
             ;;
@@ -219,6 +219,7 @@ mk_configs () {
         echo "remote-cert-tls client"
         echo ""
         echo "cipher AES-256-GCM"
+        echo "ncp-ciphers AES-128-CBC AES-128-CFB AES-128-CFB1 AES-128-CFB8 AES-128-GCM AES-128-OFB AES-192-CBC AES-192-CFB AES-192-CFB1 AES-192-CFB8 AES-192-GCM AES-192-OFB AES-256-CBC AES-256-CFB AES-256-CFB1 AES-256-CFB8 AES-256-GCM AES-256-OFB CAMELLIA-128-CBC CAMELLIA-128-CFB CAMELLIA-128-CFB1 CAMELLIA-128-CFB8 CAMELLIA-128-OFB CAMELLIA-192-CBC CAMELLIA-192-CFB CAMELLIA-192-CFB1 CAMELLIA-192-CFB8 CAMELLIA-192-OFB CAMELLIA-256-CBC CAMELLIA-256-CFB CAMELLIA-256-CFB1 CAMELLIA-256-CFB8 CAMELLIA-256-OFB"
         echo "comp-lzo"
         echo "push \"comp-lzo\""
         echo ";max-clients 100"
@@ -268,17 +269,23 @@ mk_configs () {
         echo "proto ${PROTO:-tcp}"
         echo "remote $ADDR ${PORT:-1194}"
         echo "resolv-retry infinite"
+        echo "pull"
         echo "nobind"
-        echo "user nobody"
-        echo "group nobody"
+        # echo "user nobody"
+        # echo "group nobody"
         echo "persist-key"
         echo "persist-tun"
-        echo "remote-cert-tls server"
-        echo "cipher AES-256-GCM"
+        # echo "remote-cert-tls server"
+        # echo "cipher AES-256-GCM"
         # echo "comp-lzo"
         echo "verb 3"
 
     } > $CFDIR/client.conf
+    if [ "${ROUTED:-yes}" = "yes" ]; then
+        mk_tun
+        iptables -F
+        iptables -t nat -A POSTROUTING -s ${IP:-10.57.0.0}/${BITS:-16} -o eth0 -j MASQUERADE
+    fi
     touch $CFDIR/.configured
     return 0
 }
@@ -288,14 +295,11 @@ run_server () {
         mk_configs
     fi
     echo "Launching server ..."
-    if grep -q 'dev tun' $CFDIR/server.conf; then
-        mk_tun
-    fi
     /usr/sbin/openvpn $CFDIR/server.conf
 }
 
 client_new () {
-    echo "Register new client ..."
+    echo "Register new client ..." >&2
     [ ! -f $PKI/.initialized ] && echo "Error: PKI not initialized" && exit 1
     [ -z "${1:-}" ] && echo "Error: no client name supplied"
     touch "/tmp/$1"
@@ -306,7 +310,7 @@ client_new () {
 }
 
 client_get () {
-    echo "Generating client configs ..."
+    echo "Generating client configs ..." >&2
     cn=${1:-}
     shift
     [ -z "$cn" ] && echo "Client name must be given"
