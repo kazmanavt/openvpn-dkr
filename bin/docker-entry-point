@@ -18,7 +18,7 @@ usage () {
         echo "$*"
         echo
     fi
-    echo "docker run stim/openvpn-dkr [config|client_new|client_get] [options]"
+    echo "docker run stim/openvpn-dkr [config|client_list|client_new|client_del|client_get] [options]"
     echo
     echo "        w/o arguments it run OpenVPN server according to prevoisly"
     echo "        generated config. If no config was generated or some options are"
@@ -28,10 +28,12 @@ usage () {
     echo "    By default routed networking wil be used with attempt to route"
     echo "      all localy configured networks"
     echo
-    echo "    config [options]"
-    echo "        run configure step - generate PKI and client server configs:"
+    echo "    COMMANDS:"
     echo
-    echo "      --uri proto://public_address:port"
+    echo "    config [options]"
+    echo "        run configure step - generate PKI and client/server configs:"
+    echo
+    echo "      --uri <proto://public_address:port>"
     echo "        specifieces target server endpoint proto can be udp or tcp,"
     echo "        public_address - should be ip or DNS name of server externaly"
     echo "        available for clients, port - denotes port openvpn server should"
@@ -50,6 +52,40 @@ usage () {
     echo "        use tun device and build routed networking for clients."
     echo "        ip/bits - ip address for server and netmask for network in"
     echo "        CIDR notation"
+    echo
+    echo "      --route-all"
+    echo "        route all addresses to VPN"
+    echo
+    echo "      --route-add <ip/bits>"
+    echo "        route specefied network adresses to VPN, this option may be"
+    echo "        repeated several times, to add several networks. It is redundant"
+    echo "        if '--route-all' option is used"
+    echo
+    echo "      --set-dns <ip>"
+    echo "        set specefied IP as DNS server"
+    echo
+    echo "    client_list [all|ctive|revoked]"
+    echo "        list registered clients"
+    echo
+    echo "        all include active and revoked clients"
+    echo "        active (default) include active clients only"
+    echo "        revoked (default) include revoked clients only"
+    echo
+    echo "    client_new <name>"
+    echo "        create new client"
+    echo
+    echo "    client_del <name>"
+    echo "        delete client"
+    echo
+    echo "    client_get [combo|ca|ta|cert|key|cf]"
+    echo "        print out client config files:"
+    echo "            combo (default) concatenated config with all parts needed"
+    echo "            ca server CA"
+    echo "            ta TLS authentication key"
+    echo "            cert client X509 certificate"
+    echo "            key client private key"
+    echo "            cf client openVPN config"
+    echo
 }
 
 init_pki () {
@@ -59,6 +95,7 @@ init_pki () {
     openvpn --genkey --secret $PKI/ta.key
     easyrsa --batch build-ca nopass
     easyrsa --batch build-server-full server nopass
+    easyrsa gen-crl
     touch $PKI/.initialized
 }
 
@@ -204,6 +241,7 @@ mk_configs () {
     {
         echo "dh $PKI/dh.pem"
         echo "ca $PKI/ca.crt"
+        echo "crl-verify $PKI/crl.pem"
         echo "cert $PKI/issued/server.crt"
         echo "key $PKI/private/server.key"
         echo "tls-auth $PKI/ta.key 0"
@@ -290,6 +328,21 @@ run_server () {
     /usr/sbin/openvpn $CFDIR/server.conf
 }
 
+client_list () {
+    if [ ${1:-active} = "all" -o ${1:-active} = "active" ]; then
+        echo "Active clients:"
+        echo
+        grep -vE '^R' /etc/openvpn/pki/index.txt | sed -e 's/.*CN=\(.*\)/\1/' | grep -v server
+        echo
+    fi
+    if [ ${1:-active} = "all" -o ${1:-active} = "revoked" ]; then
+        echo "Revoked clients:"
+        echo
+        grep -E '^R' /etc/openvpn/pki/index.txt | sed -e 's/.*CN=\(.*\)/\1/'
+        echo
+    fi
+}
+
 client_new () {
     echo "Register new client ..." >&2
     [ ! -f $PKI/.initialized ] && echo "Error: PKI not initialized" && exit 1
@@ -299,6 +352,11 @@ client_new () {
     rm -f "/tmp/$1"
     easyrsa --batch build-client-full "$1" nopass
     return 0
+}
+
+client_del () {
+    easyrsa --batch revoke "$1"
+    easyrsa gen-crl
 }
 
 client_get () {
@@ -362,7 +420,9 @@ else
     case $1 in
         -*) mk_configs "$@"; run_server;;
         config) shift; mk_configs "$@";;
+        client_list) shift; client_list "$@";;
         client_new) shift; client_new "$@";;
+        client_del) shift; client_del "$@";;
         client_get) shift; client_get "$@";;
         *) exec "$@" ;;
     esac
