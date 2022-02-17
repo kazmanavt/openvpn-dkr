@@ -355,7 +355,7 @@ client_new () {
 }
 
 client_del () {
-    easyrsa --batch revoke "$1"
+    easyrsa --batch revoke "$1" || :
     easyrsa gen-crl
 }
 
