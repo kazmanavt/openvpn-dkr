@@ -196,17 +196,12 @@ mk_configs () {
                         exit 1
                     fi
                     MASK=$(bits2mask $BITS)
+                    shift
                 fi
-                shift
             ;;
             --route-all)
                 shift
-                DEFROUTE="push \"redirect-gateway def1"
-                while [ -n "${1:-}" -a "${1#--}" = "$1" ]; do
-                    DEFROUTE="$DEFROUTE $1"
-                    shift
-                done
-                DEFROUTE="$DEFROUTE\""
+                DEFROUTE="push \"redirect-gateway def1\""
             ;;
             --route-add)
                 shift
@@ -235,6 +230,7 @@ mk_configs () {
             ;;
         esac
     done
+    [ -z "${DEFROUTE:-}" -a -z "${ROUTES:-}" ] && usage "one of --route-all or --route-add <..> must be speccefied" && exit 1
     [ -z "${ADDR:-}" ] && usage "--uri must be given once" && exit 1
     [ ! -f $PKI/.initialized ] && init_pki
     echo "Configuring ..."
