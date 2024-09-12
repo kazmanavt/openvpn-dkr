@@ -1,6 +1,6 @@
-FROM alpine:3.6
+FROM alpine:3.20
 
-RUN apk add --update openvpn easy-rsa \
+RUN apk add --update openvpn easy-rsa iptables \
     && rm -rf /tmp/* /var/tmp/* /var/cache/apk/* /var/cache/distfiles/* \
     && cp -a /etc/openvpn /etc/openvpn.std \
     && ln -s /usr/share/easy-rsa/easyrsa /usr/local/bin/easyrsa

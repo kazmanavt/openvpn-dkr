@@ -243,9 +243,9 @@ mk_configs () {
         echo "tls-auth $PKI/ta.key 0"
         echo "remote-cert-tls client"
         echo
-        echo "cipher AES-256-GCM"
-        echo "comp-lzo"
-        echo "push \"comp-lzo\""
+        echo "data-ciphers AES-256-GCM:AES-128-GCM:?CHACHA20-POLY1305:AES-256-CBC"
+        # echo "comp-lzo"
+        # echo "push \"comp-lzo\""
         echo ";max-clients 100"
         echo
         echo "user nobody"
@@ -403,12 +403,12 @@ client_get () {
     return 0
 }
 
-#  d88888b d8b   db d888888b d8888b. db    db      d8888b.  .d88b.  d888888b d8b   db d888888b 
-#  88'     888o  88 `~~88~~' 88  `8D `8b  d8'      88  `8D .8P  Y8.   `88'   888o  88 `~~88~~' 
-#  88ooooo 88V8o 88    88    88oobY'  `8bd8'       88oodD' 88    88    88    88V8o 88    88    
-#  88~~~~~ 88 V8o88    88    88`8b      88         88~~~   88    88    88    88 V8o88    88    
-#  88.     88  V888    88    88 `88.    88         88      `8b  d8'   .88.   88  V888    88    
-#  Y88888P VP   V8P    YP    88   YD    YP         88       `Y88P'  Y888888P VP   V8P    YP    
+#  d88888b d8b   db d888888b d8888b. db    db      d8888b.  .d88b.  d888888b d8b   db d888888b
+#  88'     888o  88 `~~88~~' 88  `8D `8b  d8'      88  `8D .8P  Y8.   `88'   888o  88 `~~88~~'
+#  88ooooo 88V8o 88    88    88oobY'  `8bd8'       88oodD' 88    88    88    88V8o 88    88
+#  88~~~~~ 88 V8o88    88    88`8b      88         88~~~   88    88    88    88 V8o88    88
+#  88.     88  V888    88    88 `88.    88         88      `8b  d8'   .88.   88  V888    88
+#  Y88888P VP   V8P    YP    88   YD    YP         88       `Y88P'  Y888888P VP   V8P    YP
 
 if [ $# -eq 0 ] ; then
     run_server
